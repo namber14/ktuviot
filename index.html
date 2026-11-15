@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>כתוביות מהירות</title>
+  <meta name="description" content="כתוביות בעברית וחיתוכים קטנים, בתוך הטלפון.">
+  <meta name="theme-color" content="#111829">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="preload" href="fonts/heebo-vf-hebrew.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="app.css">
+  <script type="importmap">{ "imports": { "mediabunny": "./vendor/mediabunny.min.mjs" } }</script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="layer"></div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <noscript>האפליקציה צריכה שהדפדפן יריץ קוד. פתח אותה בכרום.</noscript>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
