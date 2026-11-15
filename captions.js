@@ -153,6 +153,15 @@ export function keepRanges(project) {
       return parts;
     });
   });
+  for (const [s, e] of project.silence?.cuts ?? []) {
+    ranges = ranges.flatMap(r => {
+      if (e <= r.s || s >= r.e) return [r];
+      const parts = [];
+      if (s > r.s) parts.push({ s: r.s, e: s });
+      if (e < r.e) parts.push({ s: e, e: r.e });
+      return parts;
+    });
+  }
   ranges = ranges.filter(r => r.e - r.s > 0.08);
   let out = 0;
   return ranges.map(r => { const x = { ...r, out }; out += r.e - r.s; return x; });
@@ -173,6 +182,64 @@ export function suggestTrim(lines, duration) {
   const s = Math.max(0, live[0].s - 0.3), e = Math.min(duration, live[live.length - 1].e + 0.5);
   if (s < 0.5 && duration - e < 0.5) return null;
   return { s: s < 0.5 ? 0 : +s.toFixed(2), e: duration - e < 0.5 ? duration : +e.toFixed(2) };
+}
+
+// ---- הורדת שתיקות: לפי עוצמת הקול לאורך הסרטון ----
+
+export const ENV_FPS = 50;
+
+/** עוצמת הקול לאורך הסרטון, 50 מדידות בשנייה, דחוסה לבית אחד למדידה. */
+export function makeEnvelope(samples, sampleRate = 16000) {
+  const hop = Math.round(sampleRate / ENV_FPS), n = Math.floor(samples.length / hop);
+  const data = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let j = i * hop, end = j + hop; j < end; j++) sum += samples[j] * samples[j];
+    const db = 20 * Math.log10(Math.sqrt(sum / hop) + 1e-6);
+    data[i] = Math.max(0, Math.min(255, Math.round(((db + 90) / 90) * 255)));
+  }
+  return data;
+}
+
+export const SILENCE_LEVELS = {
+  soft: { name: 'טבעי', after: 0.2, before: 0.15, min: 0.3 },
+  normal: { name: 'רגיל', after: 0.1, before: 0.08, min: 0.18 },
+  tight: { name: 'צמוד', after: 0.05, before: 0.04, min: 0.1 },
+};
+
+/** מוצא את ההפסקות בין קטעי הדיבור. מחזיר רשימת [התחלה, סוף] בשניות, בלי הקצוות (להם יש הצעה נפרדת). */
+export function findSilences(env, lines, level) {
+  const L = SILENCE_LEVELS[level];
+  const n = env?.length ?? 0;
+  if (!L || !n) return [];
+  const rms = Float32Array.from(env, v => Math.pow(10, ((v / 255) * 90 - 90) / 20));
+  const noise = Float32Array.from(rms).sort()[Math.floor(n * 0.1)] || 0;
+  const live = lines.filter(l => l.text.trim());
+  const spoken = [];
+  for (const l of live) for (let f = Math.floor(l.s * ENV_FPS), end = Math.min(n, Math.ceil(l.e * ENV_FPS)); f < end; f++) spoken.push(rms[f]);
+  spoken.sort((a, b) => a - b);
+  const speech = Math.max(spoken[spoken.length >> 1] || 0, noise * 4 + 1e-4);
+  const threshold = Math.max(noise * 2, noise + 0.1 * (speech - noise));
+  const mergeFrames = Math.round(0.07 * ENV_FPS);
+  const segs = [];
+  let a = -1, last = -1;
+  for (let f = 0; f < n; f++) {
+    if (rms[f] > threshold) { if (a < 0) a = f; last = f; }
+    else if (a >= 0 && f - last > mergeFrames) { segs.push([a, last + 1]); a = -1; }
+  }
+  if (a >= 0) segs.push([a, last + 1]);
+  const keep = segs.filter(([x, y]) => {
+    let peak = 0;
+    for (let f = x; f < y; f++) if (rms[f] > peak) peak = rms[f];
+    const t0 = x / ENV_FPS, t1 = y / ENV_FPS;
+    return peak > speech * 0.5 || (peak > speech * 0.3 && live.some(l => l.s < t1 && l.e > t0));
+  }).map(([x, y]) => [x / ENV_FPS, y / ENV_FPS]);
+  const cuts = [];
+  for (let k = 0; k < keep.length - 1; k++) {
+    const s = keep[k][1] + L.after, e = keep[k + 1][0] - L.before;
+    if (e - s >= L.min) cuts.push([+s.toFixed(3), +e.toFixed(3)]);
+  }
+  return cuts;
 }
 
 /** מעדכן שורה אחרי שהמשתמש תיקן אותה. */
@@ -208,10 +275,17 @@ export function wrapCaption(text, measure, maxWidth) {
   return best ? best.lines : [text];
 }
 
-export function drawCaption(ctx, width, height, text) {
+export const CAPTION_SIZES = [[0.8, 'קטן'], [1, 'רגיל'], [1.25, 'גדול']];
+
+/** המיקום והגודל שהמשתמש בחר לכתובית, עם ברירות המחדל. */
+export function captionPlace(project) {
+  return { y: project?.cap?.y ?? CAPTION_STYLE.centerY, size: project?.cap?.size ?? 1 };
+}
+
+export function drawCaption(ctx, width, height, text, place = {}) {
   if (!text) return;
-  const st = CAPTION_STYLE;
-  let size = Math.round(width * st.sizeRatio);
+  const st = CAPTION_STYLE, centerY = place.y ?? st.centerY;
+  let size = Math.round(width * st.sizeRatio * (place.size ?? 1));
   const max = width * st.maxWidth;
   ctx.save();
   ctx.direction = 'rtl';
@@ -224,7 +298,7 @@ export function drawCaption(ctx, width, height, text) {
   let rows = wrapCaption(text, t => ctx.measureText(t).width, max);
   while (rows.some(r => ctx.measureText(r).width > max) && size > 14) { size -= 2; setFont(); rows = wrapCaption(text, t => ctx.measureText(t).width, max); }
   const lh = size * st.lineHeight;
-  const top = height * st.centerY - ((rows.length - 1) * lh) / 2;
+  const top = height * centerY - ((rows.length - 1) * lh) / 2;
   ctx.lineWidth = size * st.strokeRatio;
   ctx.strokeStyle = st.stroke;
   ctx.fillStyle = st.fill;

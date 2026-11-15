@@ -17,6 +17,8 @@ const I = {
   pencil: svg('<path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/>'),
   scissors: svg('<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 18M8 15.5L20 6"/>'),
   trash: svg('<path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/>'),
+  undo: svg('<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>'),
+  redo: svg('<path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>'),
   share: svg('<circle cx="6" cy="12" r="2.5"/><circle cx="17" cy="6" r="2.5"/><circle cx="17" cy="18" r="2.5"/><path d="M8.2 10.9l6.6-3.7M8.2 13.1l6.6 3.7"/>'),
 };
 
@@ -171,6 +173,7 @@ async function startNew(file) {
     const t0 = performance.now();
     const samples = await extractAudio16k(file, pct => setBusy({ pct }));
     const audioMs = Math.round(performance.now() - t0);
+    const env = cap.makeEnvelope(samples);
     const thumbsReady = makeThumbs(file, 10, info.duration).catch(() => []);
     const ready = S.engine.state === 'ready';
     setBusy({ title: ready ? 'כותב כתוביות' : 'מכין את מנוע התמלול', detail: '', pct: ready ? 0 : null, stage: 'asr' });
@@ -184,7 +187,7 @@ async function startNew(file) {
       name: lines[0].text.split(' ').slice(0, 4).map(cap.bare).join(' '),
       createdAt: Date.now(), updatedAt: Date.now(),
       duration: info.duration, width: info.width, height: info.height,
-      lines, trim: { s: 0, e: info.duration },
+      lines, trim: { s: 0, e: info.duration }, env,
       thumbs: (await thumbsReady).filter(Boolean),
       stats: { audioMs, asrMs: res.ms, threads: res.threads, fixes: fixed.fixes },
     };
@@ -206,6 +209,31 @@ function closeEditor() {
   S.p = null; S.file = null; S.sel = -1; S.now = -1;
 }
 
+let hist = [], histAt = 0;
+const snapshot = () => JSON.stringify({ lines: S.p.lines, trim: S.p.trim, silence: S.p.silence ?? null, cap: S.p.cap ?? null });
+function syncHistory() {
+  const u = app.querySelector('[data-act="undo"]'), r = app.querySelector('[data-act="redo"]');
+  if (u) u.disabled = histAt <= 0;
+  if (r) r.disabled = histAt >= hist.length - 1;
+}
+function resetHistory() { hist = [snapshot()]; histAt = 0; syncHistory(); }
+function pushHistory() {
+  const s = snapshot();
+  if (s === hist[histAt]) return;
+  hist = hist.slice(0, histAt + 1); hist.push(s);
+  if (hist.length > 60) hist.shift();
+  histAt = hist.length - 1; syncHistory();
+}
+function restore(i) {
+  histAt = i;
+  const o = JSON.parse(hist[i]);
+  S.p.lines = o.lines; S.p.trim = o.trim;
+  if (o.silence) S.p.silence = o.silence; else delete S.p.silence;
+  if (o.cap) S.p.cap = o.cap; else delete S.p.cap;
+  S.sel = -1; S.ranges = cap.keepRanges(S.p);
+  renderLines(); renderStrip(); renderTools(); layoutCaption(); sync(true); persist(); syncHistory();
+}
+
 function persist() {
   clearTimeout(saveTimer);
   const p = S.p;
@@ -218,6 +246,7 @@ function openProject(p, file) {
   S.view = 'edit'; S.sel = -1; S.now = -1;
   S.ranges = cap.keepRanges(p);
   renderEdit();
+  resetHistory();
 }
 
 function doubtsCount() { return S.p.lines.reduce((a, l) => a + (l.cut ? 0 : l.doubts.length), 0); }
@@ -251,23 +280,31 @@ function renderStrip() {
   if (p.trim.s > 0) shades.push([0, p.trim.s]);
   if (p.trim.e < p.duration) shades.push([p.trim.e, p.duration]);
   p.lines.forEach((l, i) => { if (l.cut) { const s = cap.lineSlot(p.lines, i, p.duration); shades.push([Math.max(s.s, p.trim.s), Math.min(s.e, p.trim.e)]); } });
+  for (const [s, e] of p.silence?.cuts ?? []) shades.push([Math.max(s, p.trim.s), Math.min(e, p.trim.e)]);
   strip.querySelector('.shades').innerHTML = shades.filter(([a, b]) => b > a)
     .map(([a, b]) => `<i style="left:${pct(a)}%;width:${pct(b - a)}%"></i>`).join('');
   strip.querySelector('.hs').style.left = pct(p.trim.s) + '%';
   strip.querySelector('.he').style.left = pct(p.trim.e) + '%';
-  const sug = cap.suggestTrim(p.lines, p.duration);
+}
+
+function renderTools() {
+  const box = app.querySelector('.tools');
+  if (!box) return;
+  const p = S.p, sug = cap.suggestTrim(p.lines, p.duration), sil = p.silence;
   const trimmed = p.trim.s > 0 || p.trim.e < p.duration;
-  const note = app.querySelector('.trimnote');
   const saved = sug ? sug.s + (p.duration - sug.e) : 0;
-  note.innerHTML = `${trimmed
-    ? '<button type="button" class="link" data-act="trim-reset">הקצוות נחתכו · לבטל</button>'
-    : sug ? `<button type="button" class="link" data-act="trim-suggest">הצעה: לחתוך <bdi>${saved.toFixed(1)}</bdi> שניות ריקות בקצוות</button>` : '<span>גוררים את הקצוות כדי לחתוך</span>'}
-    <bdi>${cap.formatTime(cap.totalKept(S.ranges))}</bdi>`;
+  box.innerHTML = [
+    trimmed ? '<button type="button" class="chip on" data-act="trim-reset">הקצוות נחתכו · לבטל</button>'
+      : sug ? `<button type="button" class="chip" data-act="trim-suggest">לחתוך <bdi>${saved.toFixed(1)}</bdi> שניות ריקות בקצוות</button>` : '',
+    `<button type="button" class="chip${sil ? ' on' : ''}" data-act="silence">${sil ? `שתיקות: ${cap.SILENCE_LEVELS[sil.level].name} · <bdi>${sil.cuts.length}</bdi>` : 'להוריד שתיקות'}</button>`,
+    '<button type="button" class="chip" data-act="capopts">גודל ומיקום הכתובית</button>',
+    '<button type="button" class="chip" data-act="copy">העתקת התמלול</button>',
+  ].join('');
 }
 
 function changed() {
   S.ranges = cap.keepRanges(S.p);
-  renderLines(); renderStrip(); sync(true); persist();
+  renderLines(); renderStrip(); renderTools(); sync(true); persist(); pushHistory();
 }
 
 function layoutCaption() {
@@ -275,14 +312,15 @@ function layoutCaption() {
   if (!stage || !S.p) return;
   // הסרטון ממלא את הרוחב. סרטון עומד גבוה מהחלון, אז מזיזים אותו כך שהפנים והכתובית נשארים בתמונה.
   const box = stage.getBoundingClientRect(), ar = S.p.width / S.p.height;
-  const st = cap.CAPTION_STYLE, w = box.width, h = w / ar;
-  const top = h <= box.height ? (box.height - h) / 2 : Math.min(0, Math.max(box.height - h, box.height * 0.88 - h * st.centerY));
+  const st = cap.CAPTION_STYLE, place = cap.captionPlace(S.p), w = box.width, h = w / ar;
+  const top = h <= box.height ? (box.height - h) / 2 : Math.min(0, Math.max(box.height - h, box.height * 0.88 - h * place.y));
   const v = stage.querySelector('video');
   v.style.top = top + 'px'; v.style.height = h + 'px';
-  const c = stage.querySelector('.cap'), fs = w * st.sizeRatio;
+  S.geo = { top, h, boxH: box.height };
+  const c = stage.querySelector('.cap'), fs = w * st.sizeRatio * place.size;
   c.style.width = w * st.maxWidth + 'px';
   c.style.left = (w * (1 - st.maxWidth)) / 2 + 'px';
-  c.style.top = top + h * st.centerY + 'px';
+  c.style.top = top + h * place.y + 'px';
   c.style.fontSize = fs + 'px';
   c.style.webkitTextStrokeWidth = fs * st.strokeRatio + 'px';
 }
@@ -320,7 +358,10 @@ function renderEdit() {
   app.innerHTML = `<div class="screen edit">
     <header class="bar">
       <button type="button" class="icon" data-act="home" aria-label="חזרה">${I.back}</button>
-      <h1>${esc(p.name)}</h1><span class="time"><bdi>0:00 / 0:00</bdi></span>
+      <h1>${esc(p.name)}</h1>
+      <button type="button" class="icon sm" data-act="undo" aria-label="ביטול הפעולה האחרונה" disabled>${I.undo}</button>
+      <button type="button" class="icon sm" data-act="redo" aria-label="החזרת הפעולה שבוטלה" disabled>${I.redo}</button>
+      <span class="time"><bdi>0:00 / 0:00</bdi></span>
     </header>
     <div class="stage">
       <video playsinline preload="auto" src="${S.url}"></video>
@@ -335,7 +376,7 @@ function renderEdit() {
         <button type="button" class="handle hs" data-h="s" aria-label="תחילת הסרטון"></button>
         <button type="button" class="handle he" data-h="e" aria-label="סוף הסרטון"></button>
       </div>
-      <div class="trimnote"></div>
+      <div class="tools" role="toolbar" aria-label="כלים"></div>
       <button type="button" class="save" data-act="export">שמירה לגלריה</button>
     </footer>
   </div>`;
@@ -346,7 +387,8 @@ function renderEdit() {
   video.addEventListener('seeked', () => sync());
   video.addEventListener('click', togglePlay);
   bindStrip(app.querySelector('.strip'));
-  renderLines(); renderStrip(); layoutCaption();
+  bindCaptionDrag(app.querySelector('.cap'));
+  renderLines(); renderStrip(); renderTools(); layoutCaption();
   document.fonts.load(`700 20px ${cap.CAPTION_FONT}`, 'אב');
 }
 
@@ -379,6 +421,77 @@ function bindStrip(strip) {
   const end = () => { if (drag && drag !== 'seek') { changed(); } drag = null; };
   strip.addEventListener('pointerup', end);
   strip.addEventListener('pointercancel', end);
+}
+
+// גוררים את הכתובית על הסרטון כדי להזיז אותה למעלה או למטה. נגיעה בלי גרירה = ניגון.
+function bindCaptionDrag(el) {
+  let drag = null;
+  el.addEventListener('pointerdown', e => {
+    const g = S.geo;
+    if (!g) return;
+    drag = { y0: e.clientY, start: cap.captionPlace(S.p).y, moved: false,
+      min: Math.max(0.06, (28 - g.top) / g.h), max: Math.min(0.94, (g.boxH - 28 - g.top) / g.h) };
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y0;
+    if (Math.abs(dy) > 5) drag.moved = true;
+    if (!drag.moved) return;
+    video?.pause();
+    const y = Math.min(drag.max, Math.max(drag.min, drag.start + dy / S.geo.h));
+    S.p.cap = { ...cap.captionPlace(S.p), y: +y.toFixed(3) };
+    el.style.top = S.geo.top + S.geo.h * y + 'px';
+  });
+  const end = () => { const d = drag; drag = null; if (!d) return; if (d.moved) changed(); else togglePlay(); };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', () => { drag = null; });
+}
+
+// ---------- הורדת שתיקות ----------
+async function ensureEnv() {
+  if (S.p.env?.length) return S.p.env;
+  setBusy({ title: 'בודק את הקול בסרטון', detail: '', pct: null, stage: 'env', cancel: null });
+  try { S.p.env = cap.makeEnvelope(await extractAudio16k(S.file)); persist(); return S.p.env; } finally { clearBusy(); }
+}
+
+function openSilence() {
+  video?.pause();
+  document.getElementById('toast').hidden = true;
+  const p = S.p, cur = p.silence?.level ?? '';
+  const before = cap.totalKept(cap.keepRanges({ ...p, silence: null }));
+  const opts = [['', 'בלי'], ...Object.entries(cap.SILENCE_LEVELS).map(([k, l]) => [k, l.name])];
+  layer.insertAdjacentHTML('beforeend', `<div class="cover sheetwrap" id="sheet"><div class="sheet">
+    <h2>הורדת שתיקות</h2>
+    <p>חותך את ההפסקות בין המשפטים, כך שהדיבור רציף. הסרטון המקורי לא משתנה, ואפשר לבטל בכל רגע.</p>
+    <div class="chips">${opts.map(([k, n]) => `<button type="button" class="chip${k === cur ? ' on' : ''}" data-act="silence-set" data-level="${k}">${n}</button>`).join('')}</div>
+    <p class="res">${p.silence
+      ? `נחתכו <bdi>${p.silence.cuts.length}</bdi> שתיקות. הסרטון התקצר מ־<bdi>${cap.formatTime(before)}</bdi> ל־<bdi>${cap.formatTime(cap.totalKept(S.ranges))}</bdi>.`
+      : '"טבעי" משאיר הכי הרבה אוויר בין המשפטים, "צמוד" הכי מעט.'}</p>
+    <div class="sheetrow"><span></span><button type="button" class="solid" data-act="sheet-close">סיום</button></div>
+  </div></div>`);
+}
+
+async function setSilence(level) {
+  document.getElementById('sheet')?.remove();
+  try {
+    if (!level) delete S.p.silence;
+    else S.p.silence = { level, cuts: cap.findSilences(await ensureEnv(), S.p.lines, level) };
+    changed(); openSilence();
+  } catch (err) { showError(err); }
+}
+
+// ---------- גודל ומיקום הכתובית ----------
+function openCapOpts() {
+  video?.pause();
+  document.getElementById('toast').hidden = true;
+  const place = cap.captionPlace(S.p), moved = S.p.cap?.y != null;
+  layer.insertAdjacentHTML('beforeend', `<div class="cover sheetwrap clear" id="sheet"><div class="sheet">
+    <h2>הכתובית</h2>
+    <div class="chips">${cap.CAPTION_SIZES.map(([v, n]) => `<button type="button" class="chip${v === place.size ? ' on' : ''}" data-act="cap-size" data-v="${v}">${n}</button>`).join('')}</div>
+    <p>כדי להזיז למעלה או למטה: גוררים את הכתובית עצמה על הסרטון.${moved ? ' <button type="button" class="link" data-act="cap-reset">להחזיר למקום הרגיל</button>' : ''}</p>
+    <div class="sheetrow"><span></span><button type="button" class="solid" data-act="sheet-close">סיום</button></div>
+  </div></div>`);
 }
 
 // ---------- תיקון שורה ----------
@@ -429,7 +542,10 @@ async function doExport() {
     const ms = Math.round(performance.now() - t0);
     S.p.stats = { ...S.p.stats, exportMs: ms };
     persist();
-    S.result = { ...res, ms, url: URL.createObjectURL(res.blob), name: `${S.p.name} - כתוביות.mp4` };
+    const d = new Date(), z = n => String(n).padStart(2, '0');
+    // שם ייחודי עם תאריך ושעה, כדי שהטלפון לא ישאל "להוריד שוב?"
+    const name = `${S.p.name} ${z(d.getDate())}.${z(d.getMonth() + 1)} ${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.mp4`;
+    S.result = { ...res, ms, url: URL.createObjectURL(res.blob), name };
     renderResult();
   } catch (err) { if (err?.code !== 'CANCELED') showError(err); } finally { clearBusy(); lock?.release?.(); abort = null; }
 }
@@ -443,10 +559,12 @@ function renderResult() {
     <div class="rvid"><video controls playsinline src="${r.url}"></video></div>
     <div class="rfoot">
       <p><bdi>${cap.formatTime(r.duration)}</bdi> · <bdi>${megs(r.blob.size)}</bdi> מגה · הצריבה לקחה <bdi>${seconds(r.ms)}</bdi> שניות</p>
-      <a class="save" href="${r.url}" download="${esc(r.name)}" data-act="saved">שמירה לגלריה</a>
-      ${canShare ? `<button type="button" class="ghost wide" data-act="share">${I.share}שיתוף לוואטסאפ ולרשתות</button>` : ''}
-      <small>הסרטון נשמר בתיקיית ההורדות של הטלפון, ומשם הוא מופיע גם בגלריה.</small>
+      ${canShare ? `<button type="button" class="save" data-act="share">${I.share}שיתוף לוואטסאפ ולרשתות</button>` : ''}
+      <a class="ghost wide" id="resave" href="${r.url}" download="${esc(r.name)}" data-act="saved">לשמור שוב</a>
+      <small>הסרטון נשמר לבד בתיקיית ההורדות של הטלפון, ומשם הוא מופיע גם בגלריה. לא רואה אותו שם? "לשמור שוב".</small>
     </div></div>`);
+  // נשמר מיד, בלי לחיצה נוספת
+  document.getElementById('resave').click();
 }
 
 function closeResult() {
@@ -502,6 +620,18 @@ document.addEventListener('click', async e => {
   else if (act === 'trim-suggest') { const s = cap.suggestTrim(S.p.lines, S.p.duration); if (s) { S.p.trim = s; changed(); video.currentTime = s.s; } }
   else if (act === 'trim-reset') { S.p.trim = { s: 0, e: S.p.duration }; changed(); }
   else if (act === 'export') doExport();
+  else if (act === 'undo') { if (histAt > 0) restore(histAt - 1); }
+  else if (act === 'redo') { if (histAt < hist.length - 1) restore(histAt + 1); }
+  else if (act === 'silence') openSilence();
+  else if (act === 'silence-set') setSilence(el.dataset.level);
+  else if (act === 'capopts') openCapOpts();
+  else if (act === 'cap-size') { S.p.cap = { ...cap.captionPlace(S.p), size: Number(el.dataset.v) }; document.getElementById('sheet')?.remove(); layoutCaption(); changed(); openCapOpts(); }
+  else if (act === 'cap-reset') { S.p.cap = { size: cap.captionPlace(S.p).size }; document.getElementById('sheet')?.remove(); layoutCaption(); changed(); openCapOpts(); }
+  else if (act === 'copy') {
+    const text = S.p.lines.filter(l => !l.cut && l.text.trim()).map(l => l.text).join(' ');
+    try { await navigator.clipboard.writeText(text); toast('התמלול הועתק. אפשר להדביק אותו בתיאור של הפוסט.'); }
+    catch { toast('ההעתקה לא הצליחה בדפדפן הזה.'); }
+  }
   else if (act === 'busy-cancel') S.busy?.cancel?.();
   else if (act === 'err-close') document.getElementById('err')?.remove();
   else if (act === 'sheet-close') document.getElementById('sheet')?.remove();
@@ -539,6 +669,7 @@ async function boot() {
   S.dict = await store.getDict();
   S.projects = await store.listProjects();
   renderHome();
+  try { navigator.storage?.persist?.(); } catch {} // מבקשים מהטלפון לא למחוק את הסרטונים והמילון כשנגמר מקום
   if ('serviceWorker' in navigator) {
     try {
       await navigator.serviceWorker.register('sw.js');

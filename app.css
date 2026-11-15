@@ -40,6 +40,9 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .bar h1 { font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .home .bar { grid-template-columns: minmax(0, 1fr) 48px; padding-inline: var(--gutter) 8px; }
 .bar .time { font-size: 14px; color: var(--sand); }
+.edit .bar { grid-template-columns: 48px minmax(0, 1fr) 40px 40px auto; }
+.icon.sm { width: 40px; height: 44px; }
+.icon:disabled { opacity: .3; cursor: default; }
 .icon { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; color: var(--bone); }
 .icon:active { background: var(--panel); }
 
@@ -68,7 +71,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .edit { grid-template-rows: auto minmax(160px, 47dvh) minmax(0, 1fr) auto; }
 .stage { position: relative; background: var(--deep); overflow: hidden; min-height: 0; }
 .stage video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
-.cap { position: absolute; transform: translateY(-50%); text-align: center; pointer-events: none; font-family: "Arimo", Arial, sans-serif; font-weight: 700; line-height: 1.22; color: #FFFFFF; -webkit-text-stroke: 4px #0B0F1A; paint-order: stroke fill; text-wrap: balance; }
+.cap { position: absolute; transform: translateY(-50%); text-align: center; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; font-family: "Arimo", Arial, sans-serif; font-weight: 700; line-height: 1.22; color: #FFFFFF; -webkit-text-stroke: 4px #0B0F1A; paint-order: stroke fill; text-wrap: balance; }
 .playbtn { position: absolute; inset: 0; margin: auto; width: 68px; height: 68px; border-radius: 50%; background: rgb(17 24 41 / .72); color: var(--bone); display: grid; place-items: center; }
 .playbtn svg { width: 30px; height: 30px; }
 
@@ -93,6 +96,16 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .playhead { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #FFFFFF; pointer-events: none; }
 .handle { position: absolute; top: -4px; bottom: -4px; width: 28px; margin-left: -14px; touch-action: none; }
 .handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 11px; width: 6px; border-radius: 3px; background: var(--bone); }
+.tools { display: flex; gap: 8px; min-width: 0; overflow-x: auto; scrollbar-width: none; margin-inline: calc(-1 * var(--gutter)); padding-inline: var(--gutter); }
+.tools::-webkit-scrollbar { display: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { flex: none; min-height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 999px; font-size: 15px; font-weight: 500; white-space: nowrap; color: var(--bone); }
+.chip.on { background: var(--bone); color: var(--night); border-color: var(--bone); }
+.sheet .chip { border-color: var(--sand); min-height: 44px; padding: 0 18px; }
+.sheet h2 { font-size: 20px; font-weight: 600; }
+.sheet p { color: var(--sand); font-size: 15px; }
+.sheet p.res { color: var(--bone); }
+.sheetwrap.clear { background: transparent; }
 .trimnote { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; color: var(--sand); min-height: 32px; }
 .trimnote .link { font-size: 14px; text-align: start; }
 .save { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 54px; border-radius: 12px; background: var(--coral); color: var(--on-coral); font-weight: 700; font-size: 17px; text-decoration: none; width: 100%; }
@@ -109,7 +122,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 @keyframes slide { from { transform: translateX(0); } to { transform: translateX(-186%); } }
 .pct { font-size: 34px; font-weight: 200; letter-spacing: -.03em; min-height: 44px; }
 .ghost, .solid { min-height: 48px; padding: 0 22px; border-radius: 999px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
-.ghost { border: 1px solid var(--sand); }
+.ghost { border: 1px solid var(--sand); color: var(--bone); text-decoration: none; }
 .solid { background: var(--bone); color: var(--night); }
 .wide { width: 100%; border-radius: 12px; min-height: 52px; }
 

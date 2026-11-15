@@ -1,10 +1,10 @@
 // קריאת הסרטון, הוצאת הקול, תמונות קטנות, וצריבת הכתוביות. הכול בתוך המכשיר.
 import {
   Input, BlobSource, ALL_FORMATS, AudioBufferSink, AudioSampleSink, VideoSampleSink, CanvasSink,
-  Output, Mp4OutputFormat, BufferTarget, CanvasSource, AudioSampleSource, Quality,
+  Output, Mp4OutputFormat, BufferTarget, CanvasSource, AudioSampleSource, AudioSample, Quality,
   canEncodeAudio, canEncodeVideo,
 } from 'mediabunny';
-import { drawCaption, lineIndexAt, CAPTION_FONT } from './captions.js';
+import { drawCaption, lineIndexAt, captionPlace, CAPTION_FONT } from './captions.js';
 
 const openInput = file => new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
 
@@ -115,6 +115,7 @@ export async function exportVideo(file, project, ranges, onProgress, signal) {
     await output.start();
 
     const total = ranges.reduce((a, r) => a + r.e - r.s, 0) || 1;
+    const place = captionPlace(project);
     const check = () => { if (signal?.aborted) throw new MediaError('CANCELED', 'בוטל'); };
 
     const video = (async () => {
@@ -127,7 +128,7 @@ export async function exportVideo(file, project, ranges, onProgress, signal) {
             if (e - s <= 0.001) continue;
             sample.drawWithFit(ctx, { fit: 'fill' });
             const i = lineIndexAt(project.lines, (s + e) / 2);
-            if (i >= 0) drawCaption(ctx, W, H, project.lines[i].text);
+            if (i >= 0) drawCaption(ctx, W, H, project.lines[i].text, place);
             const at = r.out + s - r.s;
             await vSource.add(at, e - s);
             onProgress?.(Math.min(1, at / total));
@@ -150,6 +151,22 @@ export async function exportVideo(file, project, ranges, onProgress, signal) {
             const to = Math.min(n, Math.round((r.e - sample.timestamp) * rate));
             if (to - from <= 0) continue;
             part = from > 0 || to < n ? sample.trim(from, to) : sample.clone();
+            // בכל חיבור בין שני קטעים: דהייה של 5 אלפיות שנייה, כדי שלא יישמע "קליק"
+            const fade = Math.round(rate * 0.005), len = to - from;
+            const pos = Math.round((sample.timestamp - r.s) * rate) + from, rangeLen = Math.round((r.e - r.s) * rate);
+            if (pos < fade || pos + len > rangeLen - fade) {
+              const ch = part.numberOfChannels, data = new Float32Array(len * ch);
+              for (let c = 0; c < ch; c++) {
+                const plane = data.subarray(c * len, (c + 1) * len);
+                part.copyTo(plane, { planeIndex: c, format: 'f32-planar' });
+                for (let k = 0; k < len; k++) {
+                  const p = pos + k, g = Math.min(1, p / fade, (rangeLen - 1 - p) / fade);
+                  if (g < 1) plane[k] *= Math.max(0, g);
+                }
+              }
+              part.close();
+              part = new AudioSample({ data, format: 'f32-planar', numberOfChannels: ch, sampleRate: rate, timestamp: outTime });
+            }
             part.setTimestamp(outTime);
             outTime += (to - from) / rate;
             await aSource.add(part);
