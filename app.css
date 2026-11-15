@@ -55,6 +55,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .hero b { font-size: 28px; font-weight: 600; margin-top: 6px; }
 .hero > span { color: var(--sand); }
 .engine { min-height: 24px; font-size: 14px; color: var(--sand); }
+#install { min-height: 44px; display: grid; place-items: center; }
 .recent { border-top: 1px solid var(--line); padding: 16px var(--gutter) 18px; display: grid; gap: 6px; max-height: 44dvh; overflow-y: auto; }
 .recent h2 { font-size: 13px; font-weight: 700; letter-spacing: .14em; color: var(--sand); margin-bottom: 4px; }
 .row { display: grid; grid-template-columns: minmax(0, 1fr) 48px; align-items: center; }

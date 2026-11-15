@@ -81,6 +81,11 @@ export async function makeThumbs(file, count, duration) {
 
 const even = n => Math.max(2, Math.round(n / 2) * 2);
 
+/** המגבלה של כרום לשיתוף קובץ, והיעד שלנו מתחתיה עם מרווח ביטחון. */
+export const SHARE_MAX_BYTES = 50 * 1024 * 1024;
+const SHARE_TARGET_BYTES = 44 * 1024 * 1024;
+const AUDIO_BITRATE = 128e3;
+
 /**
  * צורב את הכתוביות וחותך: מחזיר קובץ mp4 מוכן.
  * @param ranges  הקטעים שנשארים, כפי שחוזרים מ-keepRanges
@@ -95,7 +100,11 @@ export async function exportVideo(file, project, ranges, onProgress, signal) {
     const aTrack = await input.getPrimaryAudioTrack();
     const scale = Math.min(1, 1080 / Math.min(vTrack.displayWidth, vTrack.displayHeight));
     const W = even(vTrack.displayWidth * scale), H = even(vTrack.displayHeight * scale);
-    const quality = new Quality('high');
+    // כרום לא משתף קובץ מעל 50 מגה. לכן האיכות מותאמת לאורך הסרטון, כך שהקובץ נשאר מתחת לזה.
+    const seconds = ranges.reduce((a, r) => a + r.e - r.s, 0) || 1;
+    const natural = Math.max(2e6, W * H * 3);
+    const budget = (SHARE_TARGET_BYTES * 8) / seconds - AUDIO_BITRATE;
+    const quality = new Quality({ bitrate: Math.round(Math.max(1.2e6, Math.min(natural, budget))) });
     if (!(await canEncodeVideo('avc', { width: W, height: H, quality }))) {
       throw new MediaError('ENCODE', 'הטלפון הזה לא מצליח לקודד וידאו בדפדפן. נסה לעדכן את כרום.');
     }
@@ -109,7 +118,7 @@ export async function exportVideo(file, project, ranges, onProgress, signal) {
 
     output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target: new BufferTarget() });
     const vSource = new CanvasSource(canvas, { codec: 'avc', quality, keyFrameInterval: 2 });
-    const aSource = new AudioSampleSource({ codec: 'aac', quality: new Quality({ bitrate: 128e3 }) });
+    const aSource = new AudioSampleSource({ codec: 'aac', quality: new Quality({ bitrate: AUDIO_BITRATE }) });
     output.addVideoTrack(vSource);
     output.addAudioTrack(aSource);
     await output.start();

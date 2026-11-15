@@ -1,7 +1,7 @@
 // כתוביות מהירות: המסכים והזרימה. הכול רץ בתוך הטלפון, בלי שרת.
 import * as store from './store.js';
 import * as cap from './captions.js';
-import { readInfo, extractAudio16k, makeThumbs, exportVideo } from './media.js';
+import { readInfo, extractAudio16k, makeThumbs, exportVideo, SHARE_MAX_BYTES } from './media.js';
 
 const MODEL_BASE = 'models/';
 const app = document.getElementById('app');
@@ -123,6 +123,40 @@ function showError(err) {
     <button type="button" class="solid" data-act="err-close">הבנתי</button></div></div>`);
 }
 
+// ---------- התקנה למסך הבית ----------
+let installEvent = null;
+const isInstalled = () => matchMedia('(display-mode: standalone)').matches;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvent = e; renderInstall(); });
+window.addEventListener('appinstalled', () => { installEvent = null; renderInstall(); toast('האפליקציה הותקנה. הסמל שלה נמצא במסך הבית.'); });
+
+function browserName() {
+  const ua = navigator.userAgent;
+  const pick = re => (ua.match(re) || [])[1];
+  if (/; wv\)/.test(ua) || /FBAN|FBAV|Instagram|Line\//.test(ua)) return 'דפדפן פנימי של אפליקציה אחרת';
+  if (pick(/SamsungBrowser\/(\d+)/)) return 'סמסונג אינטרנט ' + pick(/SamsungBrowser\/(\d+)/);
+  if (pick(/EdgA?\/(\d+)/)) return 'אדג׳ ' + pick(/EdgA?\/(\d+)/);
+  if (pick(/Firefox\/(\d+)/)) return 'פיירפוקס ' + pick(/Firefox\/(\d+)/);
+  if (pick(/Chrome\/(\d+)/)) return 'כרום ' + pick(/Chrome\/(\d+)/);
+  return 'לא זוהה';
+}
+
+function installHtml() {
+  if (isInstalled()) return '';
+  if (installEvent) return '<button type="button" class="chip on" data-act="install">התקנה למסך הבית</button>';
+  return '<button type="button" class="link" data-act="install-help">איך מתקינים כאפליקציה?</button>';
+}
+function renderInstall() { const el = document.getElementById('install'); if (el) el.innerHTML = installHtml(); }
+
+function openInstallHelp() {
+  layer.insertAdjacentHTML('beforeend', `<div class="cover sheetwrap" id="sheet"><div class="sheet">
+    <h2>התקנה כאפליקציה</h2>
+    <p>בכרום: שלוש הנקודות למעלה, "הוספה למסך הבית", ואז "התקנה".</p>
+    <p>אם הקישור נפתח מתוך וואטסאפ או אפליקציה אחרת, אין שם התקנה. מעתיקים את הקישור, פותחים את כרום ומדביקים אותו בשורת הכתובת.</p>
+    <p class="res">הדפדפן שזוהה: ${esc(browserName())}.</p>
+    <div class="sheetrow"><button type="button" class="ghost" data-act="copy-link">העתקת הקישור</button><button type="button" class="solid" data-act="sheet-close">סגירה</button></div>
+  </div></div>`);
+}
+
 // ---------- מסך הפתיחה ----------
 function engineHtml() {
   const e = S.engine;
@@ -148,6 +182,7 @@ function renderHome() {
       <button type="button" class="plus" data-act="pick" aria-label="סרטון חדש">${I.plus}</button>
       <b>סרטון חדש</b><span>מהגלריה או מהמצלמה</span>
       <p id="engine" class="engine">${engineHtml()}</p>
+      <p id="install" class="engine">${installHtml()}</p>
     </main>
     <section class="recent"><h2>אחרונים</h2>
       ${rows || ''}<p class="empty">${rows ? 'כל סרטון שתערוך יחכה כאן.' : 'עוד אין סרטונים. כל סרטון שתערוך יחכה כאן, לתיקון או לשמירה חוזרת.'}</p>
@@ -553,7 +588,8 @@ async function doExport() {
 function renderResult() {
   const r = S.result;
   const file = new File([r.blob], r.name, { type: 'video/mp4' });
-  const canShare = !!navigator.canShare?.({ files: [file] });
+  const tooBig = r.blob.size > SHARE_MAX_BYTES;
+  const canShare = !tooBig && !!navigator.canShare?.({ files: [file] });
   layer.insertAdjacentHTML('beforeend', `<div class="cover result" id="result">
     <header class="bar"><button type="button" class="icon" data-act="result-close" aria-label="חזרה לעריכה">${I.back}</button><h1>הסרטון מוכן</h1><span></span></header>
     <div class="rvid"><video controls playsinline src="${r.url}"></video></div>
@@ -561,7 +597,7 @@ function renderResult() {
       <p><bdi>${cap.formatTime(r.duration)}</bdi> · <bdi>${megs(r.blob.size)}</bdi> מגה · הצריבה לקחה <bdi>${seconds(r.ms)}</bdi> שניות</p>
       ${canShare ? `<button type="button" class="save" data-act="share">${I.share}שיתוף לוואטסאפ ולרשתות</button>` : ''}
       <a class="ghost wide" id="resave" href="${r.url}" download="${esc(r.name)}" data-act="saved">לשמור שוב</a>
-      <small>הסרטון נשמר לבד בתיקיית ההורדות של הטלפון, ומשם הוא מופיע גם בגלריה. לא רואה אותו שם? "לשמור שוב".</small>
+      <small>הסרטון נשמר לבד בתיקיית ההורדות של הטלפון, ומשם הוא מופיע גם בגלריה. לא רואה אותו שם? "לשמור שוב".${tooBig ? ' הסרטון ארוך, ולכן הקובץ גדול מ־50 מגה, והדפדפן לא מאפשר לשתף אותו ישירות. משתפים אותו מהגלריה.' : ''}</small>
     </div></div>`);
   // נשמר מיד, בלי לחיצה נוספת
   document.getElementById('resave').click();
@@ -583,6 +619,7 @@ function renderDict() {
       <p class="lead">מילים שתיקנת וביקשת לזכור. בכל סרטון חדש הן נכתבות נכון לבד.</p>
       ${rows || '<p class="empty">המילון עוד ריק. כשתתקן מילה בסרטון, אשאל אם לזכור אותה לתמיד.</p>'}
       <p class="about">מנוע התמלול: ${e.state === 'ready' ? `מוכן, עובד על <bdi>${e.threads}</bdi> ${e.threads === 1 ? 'ליבה' : 'ליבות'}` : e.state === 'error' ? 'לא נטען' : 'בהכנה'}. שום דבר לא יוצא מהטלפון.</p>
+      <p class="about">לבדיקה: ${esc(browserName())} · ${isInstalled() ? 'מותקנת במסך הבית' : 'פתוחה בדפדפן'} · שיתוף קבצים ${navigator.canShare ? 'נתמך' : 'לא נתמך'}.</p>
       <p class="about">דגם התמלול בעברית פותח על ידי יעקב קולני ומופץ על ידי עברית.איי, ברישיון קריאייטיב קומונס ייחוס 4.0.</p>
     </main></div>`;
 }
@@ -639,7 +676,24 @@ document.addEventListener('click', async e => {
   else if (act === 'saved') toast('הסרטון נשמר בתיקיית ההורדות.');
   else if (act === 'share') {
     const r = S.result;
-    try { await navigator.share({ files: [new File([r.blob], r.name, { type: 'video/mp4' })] }); } catch {}
+    try { await navigator.share({ files: [new File([r.blob], r.name, { type: 'video/mp4' })] }); }
+    catch (err) {
+      // ביטול של המשתמש הוא לא תקלה. כל דבר אחר מוצג, כדי שהכפתור לא "ישתוק"
+      if (err?.name !== 'AbortError') toast(`השיתוף לא נפתח (${err?.name || 'שגיאה'}). הסרטון שמור בגלריה, ואפשר לשתף אותו משם.`);
+    }
+  }
+  else if (act === 'install') {
+    const ev = installEvent;
+    if (!ev) { openInstallHelp(); return; }
+    installEvent = null;
+    try { await ev.prompt(); await ev.userChoice; } catch {}
+    renderInstall();
+  }
+  else if (act === 'install-help') openInstallHelp();
+  else if (act === 'copy-link') {
+    try { await navigator.clipboard.writeText(location.origin + location.pathname); toast('הקישור הועתק. פותחים את כרום ומדביקים אותו.'); }
+    catch { toast(location.origin + location.pathname); }
+    document.getElementById('sheet')?.remove();
   }
   else if (act === 'toast-action') { const run = toast.action; document.getElementById('toast').hidden = true; toast.action = null; await run?.(); }
   else if (act === 'dict-del') {
